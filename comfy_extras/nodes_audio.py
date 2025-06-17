@@ -321,6 +321,64 @@ class LoadAudio:
             return "Invalid audio file: {}".format(audio)
         return True
 
+class AddBackgroundMusic:
+    @classmethod
+    def INPUT_TYPES(s):
+        input_dir = folder_paths.get_input_directory()
+        files = folder_paths.filter_files_content_types(os.listdir(input_dir), ["audio"])
+        return {"required": {
+            "main_audio": ("AUDIO",),
+            "bgm_file": (sorted(files), {"audio_upload": True}),
+            "bgm_volume": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.1}),
+        }}
+
+    CATEGORY = "audio"
+    RETURN_TYPES = ("AUDIO",)
+    FUNCTION = "mix_audio"
+
+    def mix_audio(self, main_audio, bgm_file, bgm_volume):
+        # Load BGM file
+        bgm_path = folder_paths.get_annotated_filepath(bgm_file)
+        bgm_waveform, bgm_sample_rate = torchaudio.load(bgm_path)
+        
+        main_waveform = main_audio["waveform"]
+        main_sample_rate = main_audio["sample_rate"]
+        
+        # Resample BGM if needed
+        if bgm_sample_rate != main_sample_rate:
+            bgm_waveform = torchaudio.functional.resample(bgm_waveform, bgm_sample_rate, main_sample_rate)
+        
+        # Convert to stereo if needed
+        if main_waveform.size(1) == 1:
+            main_waveform = main_waveform.repeat(1, 2, 1)
+        if bgm_waveform.size(0) == 1:
+            bgm_waveform = bgm_waveform.repeat(2, 1)
+        
+        # Adjust BGM length to match main audio
+        main_length = main_waveform.size(-1)
+        bgm_length = bgm_waveform.size(-1)
+        
+        if bgm_length < main_length:
+            # Loop BGM if it's shorter
+            repeats = (main_length + bgm_length - 1) // bgm_length
+            bgm_waveform = bgm_waveform.repeat(1, repeats)
+            bgm_waveform = bgm_waveform[..., :main_length]
+        else:
+            # Trim BGM if it's longer
+            bgm_waveform = bgm_waveform[..., :main_length]
+        
+        # Adjust BGM volume and mix
+        bgm_waveform = bgm_waveform * bgm_volume
+        mixed_waveform = main_waveform.clone()
+        mixed_waveform[0] = main_waveform[0] + bgm_waveform
+        
+        # Normalize to prevent clipping
+        max_val = mixed_waveform.abs().max()
+        if max_val > 1.0:
+            mixed_waveform = mixed_waveform / max_val
+        
+        return ({"waveform": mixed_waveform, "sample_rate": main_sample_rate},)
+
 NODE_CLASS_MAPPINGS = {
     "EmptyLatentAudio": EmptyLatentAudio,
     "VAEEncodeAudio": VAEEncodeAudio,
@@ -331,6 +389,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadAudio": LoadAudio,
     "PreviewAudio": PreviewAudio,
     "ConditioningStableAudio": ConditioningStableAudio,
+    "AddBackgroundMusic": AddBackgroundMusic,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -342,4 +401,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveAudio": "Save Audio (FLAC)",
     "SaveAudioMP3": "Save Audio (MP3)",
     "SaveAudioOpus": "Save Audio (Opus)",
+    "AddBackgroundMusic": "Add Background Music",
 }
